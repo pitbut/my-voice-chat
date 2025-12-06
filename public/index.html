@@ -16,82 +16,135 @@
   <h1>Голосовая комната</h1>
   <button id="join">ВОЙТИ И ГОВОРИТЬ</button>
   <div id="status">Микрофон включится автоматически</div>
-
   <script type="module">
     import { Device } from 'https://cdn.jsdelivr.net/npm/mediasoup-client@3/lib/index.js';
-
+    
     const device = new Device();
     let sendTransport, producer;
+    const activeConsumers = new Set(); // Отслеживаем активных консьюмеров
 
     document.getElementById('join').onclick = async () => {
       try {
+        // Загружаем device
         const caps = await fetch('/getRouterRtpCapabilities').then(r => r.json());
         await device.load({ routerRtpCapabilities: caps });
 
+        // Создаем транспорт для отправки
         const transportInfo = await fetch('/createTransport', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ sender: true })
+          body: JSON.stringify({})
         }).then(r => r.json());
 
         sendTransport = device.createSendTransport(transportInfo);
 
-        sendTransport.on('connect', async ({ dtlsParameters }, callback) => {
-          await fetch('/transport-connect', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ dtlsParameters })
-          });
-          callback();
+        sendTransport.on('connect', async ({ dtlsParameters }, callback, errback) => {
+          try {
+            await fetch('/transport-connect', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ 
+                transportId: sendTransport.id,
+                dtlsParameters 
+              })
+            });
+            callback();
+          } catch (error) {
+            errback(error);
+          }
         });
 
-        sendTransport.on('produce', async (params, callback) => {
-          const { id } = await fetch('/transport-produce', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(params)
-          }).then(r => r.json());
-          callback({ id });
+        sendTransport.on('produce', async (params, callback, errback) => {
+          try {
+            const { id } = await fetch('/transport-produce', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                transportId: sendTransport.id,
+                kind: params.kind,
+                rtpParameters: params.rtpParameters
+              })
+            }).then(r => r.json());
+            callback({ id });
+          } catch (error) {
+            errback(error);
+          }
         });
 
+        // Получаем микрофон
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
         producer = await sendTransport.produce({ track: stream.getAudioTracks()[0] });
 
         document.getElementById('status').textContent = 'Ты в эфире! Говори!';
         document.getElementById('join').remove();
 
-        // Автоматически слушаем всех новых участников
+        // Начинаем слушать других
         setInterval(consumeNewProducers, 3000);
+        
       } catch (e) {
+        console.error('Ошибка:', e);
         document.getElementById('status').textContent = 'Ошибка: ' + e.message;
       }
     };
 
     async function consumeNewProducers() {
       try {
-        const data = await fetch('/consume', {
+        const consumersData = await fetch('/consume', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ rtpCapabilities: device.rtpCapabilities })
-        }).then(r => r.json()).catch(() => null);
+          body: JSON.stringify({ 
+            rtpCapabilities: device.rtpCapabilities 
+          })
+        }).then(r => r.json()).catch(() => []);
 
-        if (!data || !data.id) return;
+        if (!Array.isArray(consumersData)) return;
 
-        const recvTransport = device.createRecvTransport(data);
-        recvTransport.on('connect', ({ dtlsParameters }, callback) => callback());
+        for (const data of consumersData) {
+          // Пропускаем уже активных консьюмеров
+          if (activeConsumers.has(data.consumerId)) continue;
+          
+          activeConsumers.add(data.consumerId);
 
-        const consumer = await recvTransport.consume({
-          id: data.consumerId,
-          producerId: data.producerId,
-          kind: data.kind,
-          rtpParameters: data.rtpParameters
-        });
+          const recvTransport = device.createRecvTransport({
+            id: data.transportId,
+            iceParameters: data.iceParameters,
+            iceCandidates: data.iceCandidates,
+            dtlsParameters: data.dtlsParameters
+          });
 
-        const stream = new MediaStream([consumer.track]);
-        const audio = new Audio();
-        audio.srcObject = stream;
-        audio.play().catch(() => {});
-      } catch (e) {}
+          recvTransport.on('connect', async ({ dtlsParameters }, callback, errback) => {
+            try {
+              await fetch('/transport-connect', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ 
+                  transportId: recvTransport.id,
+                  dtlsParameters 
+                })
+              });
+              callback();
+            } catch (error) {
+              errback(error);
+            }
+          });
+
+          const consumer = await recvTransport.consume({
+            id: data.consumerId,
+            producerId: data.producerId,
+            kind: data.kind,
+            rtpParameters: data.rtpParameters
+          });
+
+          const audioStream = new MediaStream([consumer.track]);
+          const audio = new Audio();
+          audio.srcObject = audioStream;
+          audio.play().catch(e => console.error('Ошибка воспроизведения:', e));
+          
+          console.log('Слушаем продюсера:', data.producerId);
+        }
+      } catch (e) {
+        console.error('Ошибка consume:', e);
+      }
     }
   </script>
 </body>
