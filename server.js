@@ -1,7 +1,7 @@
 const express = require('express');
 const mediasoup = require('mediasoup');
-
 const app = express();
+
 app.use(express.json());
 app.use(express.static('public'));
 
@@ -24,9 +24,17 @@ let worker, router, producerTransport, producer;
       },
     ],
   });
-
+  
   console.log('Mediasoup запущен');
 })();
+
+// Получаем публичный IP для Render
+const getAnnouncedIp = () => {
+  if (process.env.RENDER_EXTERNAL_HOSTNAME) {
+    return process.env.RENDER_EXTERNAL_HOSTNAME;
+  }
+  return undefined;
+};
 
 app.get('/getRouterRtpCapabilities', (req, res) => {
   res.json(router.rtpCapabilities);
@@ -35,8 +43,16 @@ app.get('/getRouterRtpCapabilities', (req, res) => {
 app.post('/createTransport', async (req, res) => {
   const transport = await router.createWebRtcTransport({
     listenInfos: [
-      { protocol: 'udp', ip: '0.0.0.0' },
-      { protocol: 'tcp', ip: '0.0.0.0' },
+      { 
+        protocol: 'udp', 
+        ip: '0.0.0.0',
+        announcedIp: getAnnouncedIp()
+      },
+      { 
+        protocol: 'tcp', 
+        ip: '0.0.0.0',
+        announcedIp: getAnnouncedIp()
+      },
     ],
     enableUdp: true,
     enableTcp: true,
@@ -68,8 +84,16 @@ app.post('/consume', async (req, res) => {
 
   const transport = await router.createWebRtcTransport({
     listenInfos: [
-      { protocol: 'udp', ip: '0.0.0.0' },
-      { protocol: 'tcp', ip: '0.0.0.0' },
+      { 
+        protocol: 'udp', 
+        ip: '0.0.0.0',
+        announcedIp: getAnnouncedIp()
+      },
+      { 
+        protocol: 'tcp', 
+        ip: '0.0.0.0',
+        announcedIp: getAnnouncedIp()
+      },
     ],
   });
 
@@ -93,5 +117,5 @@ app.post('/consume', async (req, res) => {
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, '0.0.0.0', () => {
-  console.log(`Сервер запущен на порту ${PORT}`);
+  console.log(`Сервер запущен на порту ${PORT}`); // ← ИСПРАВЛЕНО!
 });
