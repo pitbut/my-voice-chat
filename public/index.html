@@ -3,65 +3,79 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Моя голосовая комната</title>
+  <title>Голосовая комната</title>
   <style>
-    body { margin:0; font-family: system-ui; background: #0d1117; color: white; height: 100vh; display: flex; align-items: center; justify-content: center; flex-direction: column; }
-    h1 { font-size: 3em; margin-bottom: 20px; }
-    button { padding: 20px 50px; font-size: 1.5em; background: #238636; border: none; border-radius: 15px; color: white; cursor: pointer; }
-    button:hover { background: #2ea043; }
-    #info { margin-top: 30px; font-size: 1.3em; }
+    body { margin:0; font-family:system-ui; background:#0d1117; color:white; height:100vh; display:flex; align-items:center; justify-content:center; flex-direction:column; }
+    h1 { font-size:3em; margin:0; }
+    button { margin-top:30px; padding:20px 50px; font-size:1.8em; background:#238636; border:none; border-radius:16px; color:white; cursor:pointer; }
+    button:hover { background:#2ea043; }
+    #status { margin-top:30px; font-size:1.5em; }
   </style>
 </head>
 <body>
   <h1>Голосовая комната</h1>
   <button id="join">ВОЙТИ И ГОВОРИТЬ</button>
-  <div id="info">Микрофон включится автоматически</div>
+  <div id="status">Микрофон включится автоматически</div>
 
   <script type="module">
     import { Device } from 'https://cdn.jsdelivr.net/npm/mediasoup-client@3/lib/index.js';
 
     const device = new Device();
-    let producer;
+    let sendTransport, producer;
 
     document.getElementById('join').onclick = async () => {
-      const rtpCapabilities = await fetch('/getRouterRtpCapabilities').then(r => r.json());
-      await device.load({ routerRtpCapabilities: rtpCapabilities });
+      try {
+        const caps = await fetch('/getRouterRtpCapabilities').then(r => r.json());
+        await device.load({ routerRtpCapabilities: caps });
 
-      const transportInfo = await fetch('/createTransport', {
-        method: 'POST',
-        body: JSON.stringify({ sender: true }),
-        headers: { 'Content-Type': 'application/json' }
-      }).then(r => r.json());
+        const transportInfo = await fetch('/createTransport', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sender: true })
+        }).then(r => r.json());
 
-      const sendTransport = device.createSendTransport(transportInfo);
+        sendTransport = device.createSendTransport(transportInfo);
 
-      sendTransport.on('connect', async ({ dtlsParameters }, callback) => {
-        await fetch('/transport-connect', { method: 'POST', body: JSON.stringify({ dtlsParameters }), headers: { 'Content-Type': 'application/json' } });
-        callback();
-      });
+        sendTransport.on('connect', async ({ dtlsParameters }, callback) => {
+          await fetch('/transport-connect', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ dtlsParameters })
+          });
+          callback();
+        });
 
-      sendTransport.on('produce', async (parameters, callback) => {
-        const { id } = await fetch('/transport-produce', { method: 'POST', body: JSON.stringify(parameters), headers: { 'Content-Type': 'application/json' } }).then(r => r.json());
-        callback({ id });
-      });
+        sendTransport.on('produce', async (params, callback) => {
+          const { id } = await fetch('/transport-produce', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(params)
+          }).then(r => r.json());
+          callback({ id });
+        });
 
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const track = stream.getAudioTracks()[0];
-      producer = await sendTransport.produce({ track });
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        producer = await sendTransport.produce({ track: stream.getAudioTracks()[0] });
 
-      document.getElementById('info').textContent = 'Ты в эфире! Все слышат друг друга';
-      document.getElementById('join').remove();
+        document.getElementById('status').textContent = 'Ты в эфире! Говори!';
+        document.getElementById('join').remove();
 
-      setInterval(startConsuming, 3000);
+        // Автоматически слушаем всех новых участников
+        setInterval(consumeNewProducers, 3000);
+      } catch (e) {
+        document.getElementById('status').textContent = 'Ошибка: ' + e.message;
+      }
     };
 
-    async function startConsuming() {
+    async function consumeNewProducers() {
       try {
         const data = await fetch('/consume', {
           method: 'POST',
-          body: JSON.stringify({ rtpCapabilities: device.rtpCapabilities }),
-          headers: { 'Content-Type': 'application/json' }
-        }).then(r => r.json());
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ rtpCapabilities: device.rtpCapabilities })
+        }).then(r => r.json()).catch(() => null);
+
+        if (!data || !data.id) return;
 
         const recvTransport = device.createRecvTransport(data);
         recvTransport.on('connect', ({ dtlsParameters }, callback) => callback());
@@ -70,13 +84,13 @@
           id: data.consumerId,
           producerId: data.producerId,
           kind: data.kind,
-          rtpParameters: data.rtpParameters,
+          rtpParameters: data.rtpParameters
         });
 
         const stream = new MediaStream([consumer.track]);
         const audio = new Audio();
         audio.srcObject = stream;
-        audio.play();
+        audio.play().catch(() => {});
       } catch (e) {}
     }
   </script>
