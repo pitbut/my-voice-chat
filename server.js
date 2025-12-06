@@ -25,24 +25,25 @@ let worker, router, producerTransport, producer;
     ],
   });
 
-  console.log('Mediasoup сервер запущен');
+  console.log('Mediasoup запущен');
 })();
 
-app.get('/getRouterRtpCapabilities', async (req, res) => {
+app.get('/getRouterRtpCapabilities', (req, res) => {
   res.json(router.rtpCapabilities);
 });
 
 app.post('/createTransport', async (req, res) => {
   const transport = await router.createWebRtcTransport({
-    listenIps: [{ ip: '0.0.0.0' }],
+    listenInfos: [
+      { protocol: 'udp', ip: '0.0.0.0' },
+      { protocol: 'tcp', ip: '0.0.0.0' },
+    ],
     enableUdp: true,
     enableTcp: true,
     preferUdp: true,
   });
 
-  if (req.body.sender) {
-    producerTransport = transport;
-  }
+  if (req.body.sender) producerTransport = transport;
 
   res.json({
     id: transport.id,
@@ -54,26 +55,22 @@ app.post('/createTransport', async (req, res) => {
 
 app.post('/transport-connect', async (req, res) => {
   await producerTransport.connect(req.body.dtlsParameters);
-  res.json({ connected: true });
+  res.json({ ok: true });
 });
 
 app.post('/transport-produce', async (req, res) => {
-  producer = await producerTransport.produce({
-    kind: req.body.kind,
-    rtpParameters: req.body.rtpParameters,
-  });
-
+  producer = await producerTransport.produce(req.body);
   res.json({ id: producer.id });
 });
 
 app.post('/consume', async (req, res) => {
-  if (!producer) return res.status(400).json({ error: 'no producer yet' });
+  if (!producer) return res.status(503).json({ error: 'no producer yet' });
 
   const transport = await router.createWebRtcTransport({
-    listenIps: [{ ip: '0.0.0.0' }],
-    enableUdp: true,
-    enableTcp: true,
-    preferUdp: true,
+    listenInfos: [
+      { protocol: 'udp', ip: '0.0.0.0' },
+      { protocol: 'tcp', ip: '0.0.0.0' },
+    ],
   });
 
   const consumer = await transport.consume({
@@ -95,4 +92,6 @@ app.post('/consume', async (req, res) => {
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Сервер работает: https://localhost:${PORT}`));
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`Сервер запущен на порту ${PORT}`);
+});
