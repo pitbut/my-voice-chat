@@ -1,0 +1,15 @@
+{
+  "name": "my-voice-chat",
+  "version": "1.0.0",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "mediasoup": "^3.13.14"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
